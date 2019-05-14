@@ -4,7 +4,7 @@ import logging
 import sys
 if sys.version[0] == '2':
     import ConfigParser as configparser
-    from configparser import SafeConfigParser as CP
+    from ConfigParser import SafeConfigParser as CP
 else:
     import configparser
     from configparser import ConfigParser as CP
