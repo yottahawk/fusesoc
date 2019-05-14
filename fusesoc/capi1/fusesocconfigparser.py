@@ -2,13 +2,15 @@ import os
 import sys
 if sys.version[0] == '2':
     import ConfigParser as configparser
+    from configparser import SafeConfigParser as CP
 else:
     import configparser
+    from configparser import ConfigParser as CP
 
-class FusesocConfigParser(configparser.SafeConfigParser):
+class FusesocConfigParser(CP):
     def __init__(self, config_file):
         if sys.version[0] == '2':
-            configparser.SafeConfigParser.__init__(self)
+            CP.__init__(self)
         else:
             super(FusesocConfigParser, self).__init__()
         if not os.path.exists(config_file):
@@ -28,7 +30,7 @@ class FusesocConfigParser(configparser.SafeConfigParser):
         except IndexError:
             raise SyntaxError("Could not find API version in " + config_file)
         try:
-            self.readfp(f)
+            self.read_file(f)
         except configparser.MissingSectionHeaderError:
             raise SyntaxError("Missing section header")
         except configparser.ParsingError as e:
