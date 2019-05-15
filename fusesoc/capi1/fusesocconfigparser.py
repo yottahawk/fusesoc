@@ -29,15 +29,18 @@ class FusesocConfigParser(CP):
 
         except IndexError:
             raise SyntaxError("Could not find API version in " + config_file)
+        if sys.version[0] == '2':
+            exceptions = (configparser.ParsingError,
+                          configparser.DuplicateSectionError)
+        else:
+            exceptions = (configparser.ParsingError,
+                          configparser.DuplicateSectionError,
+                          configparser.DuplicateOptionError)
         try:
             self.read_file(f)
         except configparser.MissingSectionHeaderError:
             raise SyntaxError("Missing section header")
-        except configparser.ParsingError as e:
-            raise SyntaxError(e.message)
-        except configparser.DuplicateSectionError as e:
-            raise SyntaxError(e.message)
-        except configparser.DuplicateOptionError as e:
+        except exceptions as e:
             raise SyntaxError(e.message)
 
     def get_section(self, section):
