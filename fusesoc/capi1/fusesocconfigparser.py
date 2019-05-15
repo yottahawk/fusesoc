@@ -37,7 +37,10 @@ class FusesocConfigParser(CP):
                           configparser.DuplicateSectionError,
                           configparser.DuplicateOptionError)
         try:
-            self.read_file(f)
+            if sys.version[0] == '2':
+                self.readfp(f)
+            else:
+                self.read_file(f)
         except configparser.MissingSectionHeaderError:
             raise SyntaxError("Missing section header")
         except exceptions as e:
