@@ -426,6 +426,16 @@ def init_logging(verbose, monochrome, log_file=None):
         logger.debug("Colorful output")
 
 def init_coremanager(config, args_cores_root):
+    """
+
+
+
+    :param obj config: The fusesoc Config() instance for the current environment
+    :param args_cores_root: Any cmdlinearg-specified additional cores_root path(s)
+
+    :returns: A 'CoreManager' class instance
+
+    """
     logger.debug("Command line arguments: " + str(sys.argv))
 
     if os.getenv("FUSESOC_CORES"):
@@ -440,10 +450,10 @@ def init_coremanager(config, args_cores_root):
 
     core_libraries = [l['location'] for l in config.libraries.values()]
     for cores_root in config.cores_root + \
-                       [config.systems_root] + \
-                       env_cores_root + \
-                       core_libraries + \
-                       args_cores_root:
+                      [config.systems_root] + \
+                      env_cores_root + \
+                      core_libraries + \
+                      args_cores_root:
         try:
             cm.add_cores_root(cores_root)
         except (RuntimeError, IOError) as e:

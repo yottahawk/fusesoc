@@ -4,6 +4,8 @@ import os
 from pyparsing import Forward, OneOrMore, Optional, Suppress, Word, alphanums
 import shutil
 import yaml
+import pathlib
+import copy
 
 from fusesoc import utils
 from fusesoc.provider import get_provider
@@ -130,16 +132,6 @@ class Core:
             raise SyntaxError("Missing 'name' parameter")
         self.sanitized_name = self.name.sanitized_name
 
-        for fs in self.filesets.values():
-            if fs.file_type:
-                for f in fs.files:
-                    if not f.file_type:
-                        f.file_type = str(fs.file_type)
-            if fs.logical_name:
-                for f in fs.files:
-                    if not f.logical_name:
-                        f.logical_name = str(fs.logical_name)
-
         if self.provider:
             self.files_root = os.path.join(cache_root,
                                            self.sanitized_name)
@@ -149,6 +141,49 @@ class Core:
             self.provider.files_root = self.files_root
         else:
             self.files_root = self.core_root
+
+        # Convert globbed designators with lists of matching files
+        # Populate file metadata from list-wide entries
+        # Eg. logical_name, file_type etc.
+
+        for n,fs in self.filesets.items():
+            # First process any globs found, by creating new File items for each globbed file
+            remove_list = []
+            for f in fs.files:
+                p = pathlib.Path(self.files_root).joinpath(f.name)
+                try:
+                    p.exists()
+                except:
+                    #TODO Check if valid glob
+                    # Assuming it is a glob, loop over and create new file items, with idential attributes to parent
+                    logger.debug('Glob found : ' + str(p))
+                    # Extract the glob string from the parent path
+                    for i in range(len(p.parts)):
+                        if "*" in p.parts[i]:
+                            parent = pathlib.Path("").joinpath(*p.parts[:i])
+                            glob = pathlib.Path("").joinpath(*p.parts[i:])
+                            break
+                    # Mark the original glob-path for removal from the list of files
+                    remove_list.append(f)
+                    # Create new file entries for each file returned by the glob
+                    for g in parent.glob(str(glob)):
+                        newpath = copy.deepcopy(f)
+                        setattr(newpath, 'name', str(g.relative_to(pathlib.Path(self.files_root))))
+                        fs.files.append(newpath)
+
+            logger.debug('Remove glob list = ' + str(list([x.name for x in remove_list])))
+            for file_obj in remove_list:
+                logger.debug('Removing file object ' + file_obj.name + ' from fileset')
+                fs.files.remove(file_obj)
+
+            if fs.file_type:
+                for f in fs.files:
+                    if not f.file_type:
+                        f.file_type = str(fs.file_type)
+            if fs.logical_name:
+                for f in fs.files:
+                    if not f.logical_name:
+                        f.logical_name = str(fs.logical_name)
 
     def cache_status(self):
         if self.provider:
@@ -475,6 +510,8 @@ Targets:
         self._debug(" Resolving target for flags '{}'".format(str(flags)))
 
         target_name = None
+        # get('is_toplevel') is set to False for all of the 'depend' cores
+        # Therefore, the selected target name will always be 'default' for these cores
         if flags.get('is_toplevel') and flags.get('target'):
             target_name = flags.get('target')
         else:
@@ -487,26 +524,36 @@ Targets:
             self._debug("Matched no target")
 
     def _get_filesets(self, flags):
+        """ Returns a subset of this core's filesets, which  """
         self._debug("Getting filesets for flags '{}'".format(str(flags)))
         target = self._get_target(flags)
         if not target:
             return []
         filesets = []
 
+        logger.debug('Target : ' + str(target.name))
+        logger.debug('Target filesets : ' + str(target.filesets))
         for fs in self._parse_list(flags, target.filesets):
             if not fs in self.filesets:
                 raise SyntaxError("Fileset '{}', requested by fileset '{}', was not found".format(fs, target.name))
             filesets.append(self.filesets[fs])
+            # logger.debug('ABC ' + str(self.filesets[fs]))
 
         self._debug(" Matched filesets {}".format(target.filesets))
         return filesets
 
     def _parse_list(self, flags, l):
+        """ Parse list of strings for matches in the keys or values of the flags dict """
         r = []
         for x in l:
             _x = x.parse(flags)
             if _x:
                 r.append(_x)
+        import pprint
+        logger.debug("List parsed!!")
+        logger.debug(flags)
+        logger.debug(l)
+        logger.debug(r)
         return r
     #return [x.parse(flags) for x in l if x.parse(flags)]
 
@@ -567,6 +614,14 @@ Fileset:
     - name : depend
       type : String
       desc : Dependencies of fileset
+
+Depend:
+  description : A ip-core dependency may have a number of filesets and parameters, which may be used and configured differently as required as part of the top-level project. For example, during synthesis all 'rtl' filesets may be required, but during test both 'rtl' and 'tb' filesets may be needed from all dependencies. Also, it would be desirable to increase test-coverage by changing certain parameters that apply to dependency sources.
+  members: []
+  lists:
+    - name : filesets
+      type : String
+      desc : File sets to include from dependency as part of top-level fileset
 
 Generate:
   description : The elements in this section each describe a parameterized instance of a generator. They specify which generator to invoke and any generator-specific parameters.

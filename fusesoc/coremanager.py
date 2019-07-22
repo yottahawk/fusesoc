@@ -22,21 +22,30 @@ class DependencyError(Exception):
         return repr(self.value)
 
 class CoreDB(object):
+    """ Stores all loaded Core() objects
+
+    This can be both CAPI1 and CAPI2 objects simultaneously
+    The database object is a list, 'self._cores'
+    """
+
     def __init__(self):
         self._cores = {}
 
     #simplesat doesn't allow ':', '-' or leading '_'
     def _package_name(self, vlnv):
+        """ Returns a vln(v) string """
         _name = "{}_{}_{}".format(vlnv.vendor,
                                   vlnv.library,
                                   vlnv.name).lstrip("_")
         return _name.replace('-','__')
 
     def _package_version(self, vlnv):
+        """ Returns a (vln)v string """
         return "{}-{}".format(vlnv.version,
                               vlnv.revision)
 
     def _parse_depend(self, depends):
+        """ Returns a vlnv list of dependencies """
         #FIXME: Handle conflicts
         deps = []
         _s = "{} {} {}"
@@ -47,8 +56,9 @@ class CoreDB(object):
         return ", ".join(deps)
 
     def add(self, core):
+        """ Adds new cores to the DB. Extisting cores with the same name are overwritten """
         name = str(core.name)
-        logger.debug("Adding core " + name)
+        # logger.debug("Adding core " + name)
         if name in self._cores:
             _s = "Replacing {} in {} with the version found in {}"
             logger.debug(_s.format(name,
@@ -57,6 +67,11 @@ class CoreDB(object):
         self._cores[name] = core
 
     def find(self, vlnv=None):
+        """ Returns matching core if present, else returns None
+
+        :param vlnv: 'vlnv' match candidate. When not present, returns all cores.
+
+        """
         if vlnv:
             found = self._solve(vlnv, only_matching_vlnv=True)[-1]
         else:
@@ -67,7 +82,22 @@ class CoreDB(object):
         return self._solve(top_core, flags)
 
     def _solve(self, top_core, flags={}, only_matching_vlnv=False):
+        """ Resolves dependency queries against the CoreDB
+
+
+
+        :param vlnv top_core: Core to resolve depenedencies against.
+        :param flags:
+        :param only_matching_vlnv: Only returns a single core exactly matching the vlnv given
+
+        :returns:
+
+        """
+        logger.debug(top_core)
+        logger.debug(flags)
+        logger.debug(only_matching_vlnv)
         def eq_vln(this, that):
+            """ Checks if the (Vendor,Library,Name) of two cores match """
             return \
                 this.vendor  == that.vendor and \
                 this.library == that.library and \
@@ -76,26 +106,31 @@ class CoreDB(object):
         repo = Repository()
         _flags = flags.copy()
         for core in self._cores.values():
+            # If only matching a single vlnv package, continue the loop for every non-matching core
             if only_matching_vlnv:
                 if not eq_vln(core.name, top_core):
                     continue
 
+            # Create the 'package_str' suitable for simplesat parsing
             package_str = "{} {}-{}".format(self._package_name(core.name),
                                             core.name.version,
                                             core.name.revision)
+            # If checking for dependency matches, add any dependencies to the 'package_str' if present
             if not only_matching_vlnv:
                 _flags['is_toplevel'] = (core.name == top_core)
                 _depends = core.get_depends(_flags)
                 if _depends:
                     _s = "; depends ( {} )"
                     package_str += _s.format(self._parse_depend(_depends))
-            parser = PrettyPackageStringParser(EnpkgVersion.from_string)
 
+            # Parse the 'package_str', creating PackageMetadata suitable to add to the simplesat repo
+            parser = PrettyPackageStringParser(EnpkgVersion.from_string)
             package = parser.parse_to_package(package_str)
             package.core = core
 
             repo.add_package(package)
 
+        # Perform the dependency check, outputting a list of cores if possible
         request = Request()
         _top_dep = "{} {} {}".format(self._package_name(top_core),
                                      top_core.relation,
@@ -118,6 +153,7 @@ class CoreDB(object):
         return [op.package.core for op in transaction.operations]
 
 class CoreManager(object):
+    """ Holds an instance of a CoreDB, and manages access to that database """
 
     def __init__(self, config):
         self.config = config
@@ -125,8 +161,11 @@ class CoreManager(object):
         self.db = CoreDB()
 
     def load_cores(self, path):
-        if os.path.isdir(path) == False:
-            raise IOError(path + " is not a directory")
+        """ Searches recursively for valid cores and adds them to the CoreDB() instance
+
+        If a 'FUSESOC_IGNORE' file is found, the directory is not checked.
+
+        """
         logger.debug("Checking for cores in " + path)
         for root, dirs, files in os.walk(path, followlinks=True):
             if 'FUSESOC_IGNORE' in files:
@@ -138,6 +177,7 @@ class CoreManager(object):
                     try:
                         core = Core(core_file, self.config.cache_root)
                         self.db.add(core)
+
                     except SyntaxError as e:
                         w = "Parse error. Ignoring file " + core_file + ": " + e.msg
                         logger.warning(w)
@@ -146,8 +186,12 @@ class CoreManager(object):
                         logger.warning(w.format(core_file, str(e)))
 
     def add_cores_root(self, path):
+        """ Invokes load_cores() for a valid path argument, which has not been previously cached """
         if not path:
             return
+
+        if os.path.isdir(os.path.expanduser(path)) == False:
+            raise IOError(path + " is not a directory")
 
         abspath = os.path.abspath(os.path.expanduser(path))
         if abspath in self._cores_root:
@@ -157,9 +201,11 @@ class CoreManager(object):
         self._cores_root += [abspath]
 
     def get_cores_root(self):
+        """ Return all core_root paths registered by the CoreManager() object """
         return self._cores_root
 
     def get_depends(self, core, flags):
+        """ Returns list of Core() objects on which the argument core depends """
         logger.debug("Calculating dependencies for {}{} with flags {}".format(core.relation,str(core), str(flags)))
         resolved_core = self.db.find(core)
         deps = self.db.solve(resolved_core.name, flags)
@@ -168,12 +214,14 @@ class CoreManager(object):
         return deps
 
     def get_cores(self):
+        """ Returns a list of names of all cores in the CoreManager DB """
         return {str(x.name) : x for x in self.db.find()}
 
     def get_core(self, name):
-        c = self.db.find(name)
-        c.name.relation = "=="
-        return c
+        """ Returns a matching Core() object to the Vlnv(name) parameter if found in the CoreManager DB """
+        core = self.db.find(name)
+        core.name.relation = "=="
+        return core
 
     def get_generators(self):
         generators = {}

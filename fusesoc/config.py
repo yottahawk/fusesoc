@@ -15,8 +15,15 @@ import importlib
 logger = logging.getLogger(__name__)
 
 class Config(object):
+    """ Parses and manages the fusesoc.conf file(s) """
 
     def __init__(self, path=None, file=None):
+        """ Finds the fusesoc.conf file(s), and parses them for config settings/paths and all declared libraries
+
+        Sets the parsed values as attributes of the new Config() instance.
+
+        :returns: n/a
+        """
         self.build_root = None
         self.cache_root = None
         self.cores_root = []
@@ -25,13 +32,14 @@ class Config(object):
         self.libraries = OrderedDict()
 
         config = CP()
+        # Select a config file(s), and read it in using ConfigParser
         if file is None:
             if path is None:
                 xdg_config_home = os.environ.get('XDG_CONFIG_HOME') or \
-                          os.path.join(os.path.expanduser('~'), '.config')
+                                  os.path.join(os.path.expanduser('~'), '.config')
                 config_files = ['/etc/fusesoc/fusesoc.conf',
-                        os.path.join(xdg_config_home, 'fusesoc','fusesoc.conf'),
-                        'fusesoc.conf']
+                                os.path.join(xdg_config_home, 'fusesoc','fusesoc.conf'),
+                                'fusesoc.conf']
             else:
                 logger.debug("Using config file '{}'".format(path))
                 if not os.path.isfile(path):
@@ -53,8 +61,10 @@ class Config(object):
             file.seek(0)
             self._path = file.name
 
+        # Try and set the following attributes in the Config() instance if present in .conf files
         for item in ['build_root', 'cache_root', 'systems_root', 'library_root']:
             try:
+                # 'main' is the default/root section of the .conf file
                 setattr(self, item, os.path.expanduser(config.get('main', item)))
             except configparser.NoOptionError:
                 pass
@@ -68,7 +78,7 @@ class Config(object):
         except configparser.NoSectionError:
             pass
 
-        #Set fallback values
+        #Set fallback values for above attributes if not found in .conf files
         if self.build_root is None:
             self.build_root   = os.path.abspath('build')
         if self.cache_root is None:
@@ -86,15 +96,19 @@ class Config(object):
                              os.path.join(os.path.expanduser('~'), '.local/share')
             self.library_root = os.path.join(xdg_data_home, 'fusesoc')
 
-        # Parse library sections
+        # Parse library sections in .conf files
         library_sections = [x for x in config.sections() if x.startswith('library')]
         for section in library_sections:
+            logger.debug(section.partition('.'))
             library = section.partition('.')[2]
             try:
+                # 'location' string is present for local libraries
                 location = config.get(section, 'location')
             except configparser.NoOptionError:
+                # we will later fetch/cache the library sources to here
                 location = os.path.join(self.library_root, library)
 
+            # auto-sync not yet implemented
             try:
                 auto_sync = config.getboolean(section, 'auto-sync')
             except configparser.NoOptionError:
@@ -104,6 +118,7 @@ class Config(object):
                 logger.warn(_s.format(str(e), library))
                 continue
 
+            # This will be present for remote libraries (git, github etc.)
             try:
                 sync_uri = config.get(section, 'sync-uri')
             except configparser.NoOptionError:
@@ -125,10 +140,17 @@ class Config(object):
 
         logger.debug('cache_root='+self.cache_root)
         logger.debug('cores_root='+':'.join(self.cores_root))
-        logger.debug('systems_root='+self.systems_root if self.systems_root else "Not defined")
+        logger.debug('systems_root='+(self.systems_root if self.systems_root else "Not defined"))
         logger.debug('library_root='+self.library_root)
 
     def add_library(self, name, library):
+        """ Adds a new library to the fusesoc.conf file
+
+        :param str name: Name of new library
+        :param dict library: Dict containing new library configuration
+
+        :returns: n/a
+        """
         from fusesoc.provider import get_provider
         if not hasattr(self, '_path'):
             raise RuntimeError("No FuseSoC config file found - can't add library")

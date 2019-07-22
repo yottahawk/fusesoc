@@ -12,7 +12,9 @@ class Edalizer(object):
     def __init__(self, vlnv, flags, cores, cache_root, work_root, export_root=None, system_name=None):
         if os.path.exists(work_root):
             for f in os.listdir(work_root):
-                if os.path.isdir(os.path.join(work_root, f)):
+                if "vunit_out" in f:
+                    pass
+                elif os.path.isdir(os.path.join(work_root, f)):
                     shutil.rmtree(os.path.join(work_root, f))
                 else:
                     os.remove(os.path.join(work_root, f))
