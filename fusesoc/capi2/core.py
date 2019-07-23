@@ -496,7 +496,7 @@ Targets:
             return []
         filesets = []
 
-        for fs in self._parse_list(flags, target.filesets):
+        for fs in self._parse_list(flags, target.filesets) + self._parse_list(flags, target.filesets_append):
             if not fs in self.filesets:
                 raise SyntaxError("{} : Fileset '{}', requested by fileset '{}', was not found".format(self.name, fs, target.name))
             filesets.append(self.filesets[fs])
@@ -622,6 +622,7 @@ Target:
     - name : filesets
       type : String
       desc : File sets to use in target
+      appendable : true
     - name : generate
       type : String
       desc : Parameterized generators to run for this target
@@ -738,6 +739,10 @@ def _generate_classes(j, base_class):
             for key in _items['lists']:
                 class_members[key['name']] = []
                 class_members['lists'][key['name']] = key['type']
+                appendable = key.get('appendable')
+                if appendable:
+                    class_members[key['name']+'_append'] = []
+                    class_members['lists'][key['name']+'_append'] = key['type']
         if 'dicts' in _items:
             class_members['dicts'] = {}
             for key in _items['dicts']:
