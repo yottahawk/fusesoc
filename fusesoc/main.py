@@ -299,6 +299,7 @@ def run_backend(cm, export, do_configure, do_build, do_run, flags, system_name, 
             exit(1)
         try:
             edalizer = Edalizer(core.name,
+                                cm,
                                 flags,
                                 cores,
                                 cache_root=cm.config.cache_root,

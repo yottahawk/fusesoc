@@ -397,27 +397,33 @@ class Core:
             raise SyntaxError(s.format(self.name, target.name))
 
     def get_ttptttg(self, flags):
-        self._debug("Getting ttptttg for flags {}".format(str(flags)))
-        target = self._get_target(flags)
-        ttptttg = []
+        """ Returns all generator invocations declared in a target
 
+        :param flags: Dict containing the target being run
+
+        :returns: Dict of generator instances invoked by the target, as Instance_Name keys mapped to 'Generate' objects values
+        """
+
+        self._debug("Getting ttptttg for flags {}".format(str(flags)))
+        ttptttg = {}
+
+        # Get the .core 'Target' object for the flags provided
+        target = self._get_target(flags)
         if not target:
             return ttptttg
 
+        # Get the 'Generate' objects from the 'Target' object
         _ttptttg = self._parse_list(flags, target.generate)
         if _ttptttg:
             self._debug(" Matched generator instances {}".format(_ttptttg))
-        for gen in _ttptttg:
-            if not gen in self.generate:
-                raise SyntaxError("Generator instance '{}', requested by target '{}', was not found".format(gen, target.name))
-            params = self.generate[gen].parameters or {}
-            t = {
-                'name'      : gen,
-                'generator' : str(self.generate[gen].generator),
-                'config'    : dict(params),
-                'pos'       : str(self.generate[gen].position or 'append'),
-            }
-            ttptttg.append(t)
+        for ginv in _ttptttg:
+            try:
+                # Look-up the generator invocation name from the list of generator instances
+                gi = self.generate[ginv]
+                gi_name = ginv
+            except:
+                raise SyntaxError("Generater instance '{}' invoked by target '{}' was not found".format(ginv, target.name))
+            ttptttg[ginv] = gi
         return ttptttg
 
     def get_work_root(self, flags):
@@ -523,8 +529,13 @@ Targets:
         else:
             self._debug("Matched no target")
 
-    def _get_filesets(self, flags):
-        """ Returns a subset of this core's filesets, which  """
+    def _get_filesets(self, flags, get_this_fileset=None):
+        """ Returns filesets from the core
+
+        If get_this_fileset=None, only filesets listed in the target flags['target']
+        will be returned. If a name is given, it will be searched for and returned if found.
+
+        """
         self._debug("Getting filesets for flags '{}'".format(str(flags)))
         target = self._get_target(flags)
         if not target:
@@ -535,9 +546,8 @@ Targets:
         logger.debug('Target filesets : ' + str(target.filesets))
         for fs in self._parse_list(flags, target.filesets):
             if not fs in self.filesets:
-                raise SyntaxError("Fileset '{}', requested by fileset '{}', was not found".format(fs, target.name))
+                raise SyntaxError("Fileset '{}', requested by target '{}', was not found".format(fs, target.name))
             filesets.append(self.filesets[fs])
-            # logger.debug('ABC ' + str(self.filesets[fs]))
 
         self._debug(" Matched filesets {}".format(target.filesets))
         return filesets
@@ -635,6 +645,10 @@ Generate:
     - name : position
       type : String
       desc : Where to insert the generated core. Legal values are *first*, *append* or *last*. *append* will insert core after the core that called the generator
+  lists:
+    - name : filesets
+      type : String
+      desc : One or more filesets from the core available as input to the generator. Passed as abspaths to the exported files_root.
 
 Generators:
   description : Generators are custom programs that generate FuseSoC cores. They are generally used during the build process, but can be used stand-alone too. This section allows a core to register a generator that can be used by other cores.

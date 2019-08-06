@@ -1,6 +1,8 @@
 import logging
 import os
+import pathlib
 import shutil
+import copy
 import yaml
 
 from fusesoc.vlnv import Vlnv
@@ -9,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class Edalizer(object):
 
-    def __init__(self, vlnv, flags, cores, cache_root, work_root, export_root=None, system_name=None):
+    def __init__(self, vlnv, cm, flags, cores, cache_root, work_root, export_root=None, system_name=None):
         if os.path.exists(work_root):
             for f in os.listdir(work_root):
                 if "vunit_out" in f:
@@ -32,7 +34,7 @@ class Edalizer(object):
                     d1[key] = value
             return d1
 
-        generators   = {}
+        generator_programs = {}
 
         first_snippets = []
         snippets       = []
@@ -40,6 +42,12 @@ class Edalizer(object):
         _flags = flags.copy()
         core_queue = cores[:]
         core_queue.reverse()
+
+        for core in core_queue:
+            cores = cm.get_depends(core.name, flags)
+            logger.warning("Core : " + str(core.name))
+            logger.warning("Depending cores : " + str([str(core.name) for core in cores]))
+
         while core_queue:
             snippet = {}
             core = core_queue.pop()
@@ -49,13 +57,18 @@ class Edalizer(object):
             logger.debug("Collecting EDA API parameters from {}".format(str(core.name)))
             _flags['is_toplevel'] = (core.name == vlnv)
 
-            #Extract files
             if export_root:
+                # Copy .core files to their location in the build_tree (Typically 'VLNV/src/')
                 files_root = os.path.join(export_root, core.sanitized_name)
                 core.export(files_root, _flags)
             else:
                 files_root = core.files_root
 
+            # 'rel_root' == relative path between the files_root (exported location) and work_root (eda.yml file)
+            # By default, this will be "../src/VLNV"
+            # If --no-export, it could be anything, depending on where the core_root is in the filesystem. If the
+            # core is remote(git/github), it will likely be in the .cache/fusesoc directory. For local cores, it
+            # can be anywhere.....
             rel_root = os.path.relpath(files_root, work_root)
 
             #Extract parameters
@@ -67,25 +80,29 @@ class Edalizer(object):
             #Extract scripts
             snippet['scripts'] = core.get_scripts(rel_root, _flags)
 
+            # Construct list of files to place into "eda.yml" file
             _files = []
-            for file in core.get_files(_flags):
-                if file.copyto:
-                    _name = file.copyto
+            for f in core.get_files(_flags):
+                if f.copyto:
+                    _name = f.copyto
                     dst = os.path.join(work_root, _name)
                     _dstdir = os.path.dirname(dst)
                     if not os.path.exists(_dstdir):
                         os.makedirs(_dstdir)
-                    shutil.copy2(os.path.join(files_root, file.name),
+                    shutil.copy2(os.path.join(files_root, f.name),
                                  dst)
                 else:
-                    _name = os.path.join(rel_root, file.name)
+                    _name = os.path.join(rel_root, f.name)
                 _files.append({
                     'name'            : _name,
-                    'file_type'       : file.file_type,
-                    'is_include_file' : file.is_include_file,
-                    'logical_name'    : file.logical_name})
-
+                    'file_type'       : f.file_type,
+                    'is_include_file' : f.is_include_file,
+                    'logical_name'    : f.logical_name})
             snippet['files'] = _files
+
+            logger.warning("get_depends ({})".format(core.name))
+            cores = cm.get_depends(core.name, flags)
+            logger.warning("Depending cores : " + str([str(core.name) for core in cores]))
 
             #Extract VPI modules
             snippet['vpi'] = []
@@ -95,17 +112,51 @@ class Edalizer(object):
                                        'include_dirs' : [os.path.join(rel_root, i) for i in _vpi['include_dirs']],
                                        'libs'         : _vpi['libs']})
 
-            #Extract generators if defined in CAPI
+            #Extract generator instances if allowed in CAPI, and add to list of all instances found in all cores
             if hasattr(core, 'get_generators'):
-                generators.update(core.get_generators(_flags))
+                generator_programs.update(core.get_generators(_flags))
 
             #Run generators
             if hasattr(core, 'get_ttptttg'):
-                for ttptttg_data in core.get_ttptttg(_flags):
-                    _ttptttg = Ttptttg(ttptttg_data, core, generators)
+                invoked_generator_instances = core.get_ttptttg(_flags)
+                for name, gi in invoked_generator_instances.items():
+                    try:
+                        gi.generator = generator_programs[gi.generator]
+                    except:
+                        raise RuntimeError("Could not find generator program '{}' used by generator instance {}".format(gi.generator, name))
+
+                    # If 'filesets' are specified, place all fileset files into a new list 'files', and
+                    # pass that to the generator. These files should be given with an absolute path.
+                    _files = []
+                    if gi.filesets:
+                        for fs in gi.filesets:
+                            if fs not in core.filesets:
+                                raise SyntaxError("Fileset {} requested by generator {} not found in filesets for core {}".format(fs, gi['gi_name'], core.name))
+                            for f in core.filesets[fs].files:
+                                if f.copyto:
+                                    raise SyntaxError("File {} with 'copyto' attribute cannot be passed to generator. Generators do not support files with 'copyto' attributes".format(f.name))
+                                _name = os.path.join(rel_root, f.name)
+                                abspath = pathlib.Path(pathlib.Path(work_root) / _name).resolve().absolute()
+                                abspath.exists() # Check
+                                _files.append(str(abspath.as_posix()))
+                    gi.fileset_files = _files
+
+                    # Also add the export_path to the generator
+                    gi.export_path = str(pathlib.Path(files_root).absolute())
+
+                    _ttptttg = Ttptttg(name, gi, core)
                     for gen_core in _ttptttg.generate(cache_root):
-                        gen_core.pos = _ttptttg.pos
+                        gen_core.pos = gi.position
                         core_queue.append(gen_core)
+                        # Also update the coreDB with the generated core
+                        logger.warning(core.targets)
+                        logger.warning(type(core.targets))
+                        current_target = core._get_target(_flags)
+                        for fileset in current_target.filesets:
+                            if fileset.depend:
+                                logger.warning(fileset.depend)
+                        exit(0)
+                        cm.load_cores(gen_core.core_root)
 
             if hasattr(core, 'pos'):
                 if core.pos == 'first':
@@ -141,31 +192,31 @@ from fusesoc.utils import Launcher
 
 class Ttptttg(object):
 
-    def __init__(self, ttptttg, core, generators):
-        generator_name = ttptttg['generator']
-        if not generator_name in generators:
-            raise RuntimeError("Could not find generator '{}' requested by {}".format(generator_name, core.name))
-        self.generator = generators[generator_name]
-        self.name = ttptttg['name']
-        self.pos = ttptttg['pos']
-        parameters = ttptttg['config']
+    def __init__(self, gi_name, gi, core):
+        self.gi_name = gi_name
+        self.gi = gi
 
         vlnv_str = ':'.join([core.name.vendor,
                              core.name.library,
-                             core.name.name+'-'+self.name,
+                             core.name.name+'-'+self.gi_name,
                              core.name.version])
         self.vlnv = Vlnv(vlnv_str)
 
-
+        logger.warning(gi)
+        logger.warning(type(gi))
+        # 'files_root'  : location of core src_files after fetch operation (remote/local)
+        # 'export_root' : if src_files are exported during config stage, the location of the export
         self.generator_input = {
-            'files_root' : os.path.abspath(core.files_root),
             'gapi'       : '1.0',
-            'parameters' : parameters,
             'vlnv'       : vlnv_str,
+            'files_root' : os.path.abspath(core.files_root),
+            'export_path': gi.export_path,
+            'files'      : gi.fileset_files or '',
+            'parameters' : dict(gi.parameters),
         }
 
     def generate(self, cache_root):
-        """Run a parametrized generator
+        """ Executes a parametrized generator instance
 
         Args:
             cache_root (str): The directory where to store the generated cores
@@ -174,7 +225,7 @@ class Ttptttg(object):
             list: Cores created by the generator
         """
         generator_cwd = os.path.join(cache_root, 'generated', self.vlnv.sanitized_name)
-        generator_input_file  = os.path.join(generator_cwd, self.name+'_input.yml')
+        generator_input_file  = os.path.join(generator_cwd, self.gi_name+'_input.yml')
 
         logger.info('Generating ' + str(self.vlnv))
         if not os.path.exists(generator_cwd):
@@ -182,11 +233,11 @@ class Ttptttg(object):
         with open(generator_input_file, 'w') as f:
             f.write(yaml.dump(self.generator_input))
 
-        args = [os.path.join(os.path.abspath(self.generator.root), self.generator.command),
+        args = [os.path.join(os.path.abspath(self.gi.generator.root), self.gi.generator.command),
                 generator_input_file]
 
-        if self.generator.interpreter:
-            args[0:0] = [self.generator.interpreter]
+        if self.gi.generator.interpreter:
+            args[0:0] = [self.gi.generator.interpreter]
 
         Launcher(args[0], args[1:],
                  cwd=generator_cwd).run()
