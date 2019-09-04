@@ -191,6 +191,7 @@ from fusesoc.core import Core
 from fusesoc.utils import Launcher
 
 class Ttptttg(object):
+    " Thing-That-Prepares-The-Thing-That-Generates "
 
     def __init__(self, gi_name, gi, core):
         self.gi_name = gi_name
